@@ -80,4 +80,46 @@ class CitationChecker(Middleware):
         #     Đổi doc_id sang nó, GIỮ NGUYÊN text.
         #  4. Không tìm được nguồn nào -> để `critic` xử lý, đừng bịa doc_id.
         #  5. Cập nhật report["citations"] = danh sách doc_id đã sắp xếp.
-        return report  # <- mặc định KHÔNG LÀM GÌ: agent vẫn chạy được
+        claims = report.get("claims")
+        if not isinstance(claims, list) or ctx.corpus is None:
+            return report
+
+        def supports(doc, text):
+            return any(text in line for line in doc.body.splitlines())
+
+        checked = []
+        for claim in claims:
+            if not isinstance(claim, dict):
+                checked.append(claim)
+                continue
+            text = claim.get("text")
+            if not isinstance(text, str) or not text:
+                checked.append(claim)
+                continue
+            cited = ctx.corpus.get(claim.get("doc_id"))
+            if cited is not None and supports(cited, text):
+                checked.append(claim)
+                continue
+            source = next(
+                (
+                    doc
+                    for doc in ctx.corpus.docs
+                    if doc.body in ctx.observed_text and supports(doc, text)
+                ),
+                None,
+            )
+            checked.append(
+                claim if source is None else {**claim, "doc_id": source.doc_id}
+            )
+
+        report["claims"] = checked
+        report["citations"] = sorted(
+            {
+                claim["doc_id"]
+                for claim in checked
+                if isinstance(claim, dict)
+                and isinstance(claim.get("doc_id"), str)
+                and ctx.corpus.get(claim["doc_id"]) is not None
+            }
+        )
+        return report
